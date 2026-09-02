@@ -1092,6 +1092,7 @@
 #             height=0
 #         )
 
+
 import os
 import io
 import time
@@ -1311,41 +1312,40 @@ st.markdown(
         margin-bottom: 20px;
     }
 
-    /* Updated Metric Cards Grid (5 Columns) */
+    /* Metric Cards Grid */
     .metric-grid {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 12px;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
         margin-top: 20px;
         margin-bottom: 25px;
     }
     .metric-card {
         background-color: #111111;
         border-radius: 8px;
-        padding: 16px;
+        padding: 18px;
         border-top: 3px solid #333;
     }
     .card-technical { border-top-color: #0d5c46; }
     .card-functional { border-top-color: #2b6cb0; }
     .card-hcc { border-top-color: #b7791f; }
     .card-unmapped { border-top-color: #9b2c2c; }
-    .card-blank { border-top-color: #64748b; }
 
     .metric-label {
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.05em;
         color: #a0aec0;
     }
     .metric-value {
-        font-size: 1.8rem;
+        font-size: 2rem;
         font-weight: 700;
         color: #ffffff;
         margin: 5px 0;
     }
     .metric-subtext {
-        font-size: 0.78rem;
+        font-size: 0.8rem;
         color: #718096;
     }
 
@@ -1463,7 +1463,9 @@ def load_master_lookup(file_path):
             col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note"])
             col_m_type = find_column(m_cols, ["sapobjecttype", "object type", "reference object type", "refernce object type", "obj type", "type"])
             col_m_name = find_column(m_cols, ["sapobjectname", "reference object name", "referenced object", "reference object", "obj name", "object name", "name"])
-            col_m_scope = find_column(m_cols, ["scope", "cat", "track"])
+            col_m_scope = find_column(m_cols, ["functional assessment", "scope", "cat", "track"])
+            col_m_sst = find_column(m_cols, ["sst action", "sst_action", "automated"])
+            col_m_comments = find_column(m_cols, ["comments", "comment", "notes"])
 
             if col_m_note and col_m_name and col_m_type and col_m_scope:
                 for _, row in master_df.dropna(subset=[col_m_note]).iterrows():
@@ -1472,7 +1474,11 @@ def load_master_lookup(file_path):
                         clean_val(row[col_m_name]),
                         clean_val(row[col_m_type]),
                     )
-                    lookup[key] = str(row[col_m_scope]).strip()
+                    lookup[key] = {
+                        "scope": str(row[col_m_scope]).strip(),
+                        "sst_action": str(row[col_m_sst]).strip() if col_m_sst and not pd.isna(row[col_m_sst]) else "",
+                        "comments": str(row[col_m_comments]).strip() if col_m_comments and not pd.isna(row[col_m_comments]) else ""
+                    }
         except Exception as e:
             st.error(f"Error reading master dataset: {e}")
     return lookup
@@ -1517,7 +1523,7 @@ if "step" not in st.session_state:
 # STEP 1: FILE UPLOAD SCREEN
 if st.session_state["step"] == "upload":
     st.markdown('<div class="main-heading">Drop in your ATC extract — we\'ll scope every row.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-heading">No setup, no configuration. We match each finding against the master reference on Note Number + Reference Object, then hand back your file untouched with two new columns.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-heading">No setup, no configuration. We match each finding against the master reference on Note Number + Reference Object, then hand back your file untouched with new columns.</div>', unsafe_allow_html=True)
 
     # USER GUIDE
     st.markdown(
@@ -1534,7 +1540,7 @@ if st.session_state["step"] == "upload":
             </div>
             <div class="guide-step-row">
                 <span class="guide-badge">3</span>
-                <div><b>Scope Categorization:</b> It will give scope of objects as <b>Technical</b>, <b>Functional</b>, <b>HCC/HPO</b>, or <b>Unmapped</b> based on OSS Note Number, Reference Object Name, Object Type (and Check Message column for a few unique note numbers) with a separate count of each.</div>
+                <div><b>Scope Categorization:</b> It will assign object functional assessment as <b>Technical</b>, <b>Functional</b>, <b>HCC/HPO</b>, or <b>Unmapped</b> based on OSS Note Number, Reference Object Name, Object Type (and Check Message column for a few unique note numbers) with a separate count of each.</div>
             </div>
             <div class="guide-step-row">
                 <span class="guide-badge">4</span>
@@ -1584,8 +1590,8 @@ elif st.session_state["step"] == "processing":
                 <span class="step-meta">note + ref name + ref type</span>
             </div>
             <div class="step-item">
-                <span><span class="step-icon">{step5}</span> Assigning scope and appending columns</span>
-                <span class="step-meta">2 columns</span>
+                <span><span class="step-icon">{step5}</span> Assigning functional assessment and appending columns</span>
+                <span class="step-meta">4 columns</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1626,8 +1632,10 @@ elif st.session_state["step"] == "processing":
         progress_bar.progress(80)
         render_steps(step1="✅", step2="✅", step3="✅", step4="🔵", row_count=f"{row_count:,}")
         
-        scopes_list = []
+        assessment_list = []
         match_status_list = []
+        automated_list = []
+        comments_list = []
 
         for idx, row in fresh_df.iterrows():
             note_val = clean_val(row[col_f_note])
@@ -1636,60 +1644,90 @@ elif st.session_state["step"] == "processing":
             msg_val = clean_val(row[col_f_msg]) if col_f_msg else ""
 
             has_db_op = any(op in msg_val for op in DB_OPERATIONS)
+            fresh_key = (note_val, name_val, type_val)
+            master_data = master_lookup.get(fresh_key, {})
 
-            # RULE 0: Blank Note Number Check
+            # -------------------------------------------------------------
+            # RULE 0: Blank Note Number Check (UPDATED)
+            # -------------------------------------------------------------
             if not note_val or note_val == "":
-                assigned_scope = "Blank"
-                status = "Note number not found"
+                assigned_assessment = "HCC/HPO"
+                status = "Matched"
+                automated_val = "#N/A"
+                comment_val = ""
 
             # RULE 1: Hard Override
             elif note_val == "1912445":
-                assigned_scope = "HCC/HPO"
+                assigned_assessment = "HCC/HPO"
                 status = "Matched"
+                automated_val = master_data.get("sst_action", "")
+                comment_val = master_data.get("comments", "")
 
             # RULE 2: Direct Technical Notes
             elif note_val in DIRECT_TECHNICAL_NOTES:
-                assigned_scope = "Technical"
+                assigned_assessment = "Technical"
                 status = "Matched"
+                automated_val = master_data.get("sst_action", "")
+                comment_val = master_data.get("comments", "")
 
             # RULE 3: Special Note 2198647
             elif note_val == "2198647" and has_db_op:
                 if "VBFA" in name_val:
-                    assigned_scope = "Technical"
+                    assigned_assessment = "Technical"
                     status = "Matched"
+                    automated_val = master_data.get("sst_action", "")
+                    comment_val = master_data.get("comments", "")
                 elif any(obj in name_val for obj in ["VBUP", "VBUK"]):
-                    assigned_scope = "Functional"
+                    assigned_assessment = "Functional"
                     status = "Matched"
+                    automated_val = "N/A"
+                    comment_val = master_data.get("comments", "")
                 else:
-                    fresh_key = (note_val, name_val, type_val)
                     if fresh_key in master_lookup:
-                        assigned_scope = master_lookup[fresh_key]
+                        assigned_assessment = master_data.get("scope", "")
                         status = "Matched"
+                        automated_val = master_data.get("sst_action", "")
+                        comment_val = master_data.get("comments", "")
                     else:
-                        assigned_scope = "New / Unmapped Note"
+                        assigned_assessment = "New / Unmapped Note"
                         status = "Not Found"
+                        automated_val = ""
+                        comment_val = ""
 
             # RULE 4: Specific DB-Operation Notes Override List
             elif note_val in DB_OPERATION_NOTES and has_db_op:
-                assigned_scope = DB_OPERATION_NOTES[note_val]
+                assigned_assessment = DB_OPERATION_NOTES[note_val]
                 status = "Matched"
+                automated_val = master_data.get("sst_action", "")
+                comment_val = master_data.get("comments", "")
 
             # DEFAULT: Master Database Lookup
             else:
-                fresh_key = (note_val, name_val, type_val)
                 if fresh_key in master_lookup:
-                    assigned_scope = master_lookup[fresh_key]
+                    assigned_assessment = master_data.get("scope", "")
                     status = "Matched"
+                    automated_val = master_data.get("sst_action", "")
+                    comment_val = master_data.get("comments", "")
                 else:
-                    assigned_scope = "New / Unmapped Note"
+                    assigned_assessment = "New / Unmapped Note"
                     status = "Not Found"
+                    automated_val = ""
+                    comment_val = ""
 
-            scopes_list.append(assigned_scope)
+            # Force Automated to "N/A" whenever Functional Assessment is "Functional"
+            if assigned_assessment.upper() == "FUNCTIONAL":
+                automated_val = "N/A"
+
+            assessment_list.append(assigned_assessment)
             match_status_list.append(status)
+            automated_list.append(automated_val)
+            comments_list.append(comment_val)
 
         output_df = fresh_df.copy()
-        output_df["Scope"] = scopes_list
+        output_df["Functional Assessment"] = assessment_list
         output_df["Match_Status"] = match_status_list
+        output_df["Automated"] = automated_list
+        output_df["Comments"] = comments_list
 
         progress_bar.progress(100)
         render_steps(step1="✅", step2="✅", step3="✅", step4="✅", step5="✅", row_count=f"{row_count:,}")
@@ -1722,11 +1760,10 @@ elif st.session_state["step"] in ["dashboard", "export_modal"]:
     output_df = st.session_state["processed_df"]
     total_rows = len(output_df)
 
-    tech_count = len(output_df[output_df["Scope"].str.upper() == "TECHNICAL"])
-    func_count = len(output_df[output_df["Scope"].str.upper() == "FUNCTIONAL"])
-    hcc_count = len(output_df[output_df["Scope"].str.upper() == "HCC/HPO"])
-    unmapped_count = len(output_df[output_df["Scope"].str.contains("New / Unmapped", case=False, na=False)])
-    blank_count = len(output_df[output_df["Scope"].str.upper() == "BLANK"])
+    tech_count = len(output_df[output_df["Functional Assessment"].str.upper() == "TECHNICAL"])
+    func_count = len(output_df[output_df["Functional Assessment"].str.upper() == "FUNCTIONAL"])
+    hcc_count = len(output_df[output_df["Functional Assessment"].str.upper() == "HCC/HPO"])
+    unmapped_count = len(output_df[output_df["Functional Assessment"].str.contains("New / Unmapped", case=False, na=False)])
 
     matched_pct = round(((tech_count + func_count + hcc_count) / total_rows) * 100, 1) if total_rows > 0 else 0
 
@@ -1738,7 +1775,7 @@ elif st.session_state["step"] in ["dashboard", "export_modal"]:
             st.session_state["step"] = "export_modal"
             st.rerun()
 
-    # Metric Cards Grid (Includes the new Blank Card)
+    # Metric Cards Grid
     st.markdown(f"""
     <div class="metric-grid">
         <div class="metric-card card-technical">
@@ -1761,32 +1798,25 @@ elif st.session_state["step"] in ["dashboard", "export_modal"]:
             <div class="metric-value">{unmapped_count:,}</div>
             <div class="metric-subtext">Needs your review</div>
         </div>
-        <div class="metric-card card-blank">
-            <div class="metric-label">Blank · Note number is blank</div>
-            <div class="metric-value">{blank_count:,}</div>
-            <div class="metric-subtext">{round((blank_count/total_rows)*100, 1) if total_rows else 0}% of extract</div>
-        </div>
     </div>
     """, unsafe_allow_html=True)
 
     # Filter Options
     filter_option = st.radio(
-        "Filter View By Scope:",
-        ["All", "Technical", "Functional", "HCC/HPO", "Unmapped", "Blank"],
+        "Filter View By Assessment:",
+        ["All", "Technical", "Functional", "HCC/HPO", "Unmapped"],
         horizontal=True
     )
 
     filtered_df = output_df.copy()
     if filter_option == "Technical":
-        filtered_df = output_df[output_df["Scope"].str.upper() == "TECHNICAL"]
+        filtered_df = output_df[output_df["Functional Assessment"].str.upper() == "TECHNICAL"]
     elif filter_option == "Functional":
-        filtered_df = output_df[output_df["Scope"].str.upper() == "FUNCTIONAL"]
+        filtered_df = output_df[output_df["Functional Assessment"].str.upper() == "FUNCTIONAL"]
     elif filter_option == "HCC/HPO":
-        filtered_df = output_df[output_df["Scope"].str.upper() == "HCC/HPO"]
+        filtered_df = output_df[output_df["Functional Assessment"].str.upper() == "HCC/HPO"]
     elif filter_option == "Unmapped":
-        filtered_df = output_df[output_df["Scope"].str.contains("New / Unmapped", case=False, na=False)]
-    elif filter_option == "Blank":
-        filtered_df = output_df[output_df["Scope"].str.upper() == "BLANK"]
+        filtered_df = output_df[output_df["Functional Assessment"].str.contains("New / Unmapped", case=False, na=False)]
 
     st.dataframe(filtered_df, use_container_width=True, height=360)
 
@@ -1798,13 +1828,13 @@ elif st.session_state["step"] in ["dashboard", "export_modal"]:
         <div class="export-card">
             <div class="export-badge">✓</div>
             <h2 style="margin:0; font-weight:700;">Your scoped file is ready.</h2>
-            <p style="color:#718096; font-size:0.9rem;">Every original column and row is exactly as you sent it. We only added two columns at the end.</p>
+            <p style="color:#718096; font-size:0.9rem;">Every original column and row is exactly as you sent it. We added four new columns at the end.</p>
             <div class="export-meta-box">
                 <div style="font-weight:bold; font-family:monospace; margin-bottom:8px;">{st.session_state["export_name"]}</div>
                 <div style="display:flex; justify-content:space-between; font-size:0.85rem; color:#4a5568;">
                     <span><b>ROWS:</b> {total_rows:,}</span>
-                    <span><b>ORIGINAL COLS:</b> {len(output_df.columns)-2}</span>
-                    <span><b>APPENDED:</b> Scope, Match_Status</span>
+                    <span><b>ORIGINAL COLS:</b> {len(output_df.columns)-4}</span>
+                    <span><b>APPENDED:</b> Functional Assessment, Match_Status, Automated, Comments</span>
                 </div>
             </div>
         </div>
