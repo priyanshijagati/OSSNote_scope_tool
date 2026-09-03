@@ -1450,40 +1450,60 @@ def find_column(columns, keywords_priority):
     return None
 
 # -------------------------------------------------------------
-# Cached Master File Lookup
+# Cached Master File Lookup & Secondary Fallback Index
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_master_lookup(file_path):
-    lookup = {}
+    lookup_3part = {}
+    note_fallback = {}
+    
     if os.path.exists(file_path):
         try:
             master_df = pd.read_excel(file_path)
             m_cols = list(master_df.columns)
 
-            col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note"])
-            col_m_type = find_column(m_cols, ["sapobjecttype", "object type", "reference object type", "refernce object type", "obj type", "type"])
-            col_m_name = find_column(m_cols, ["sapobjectname", "reference object name", "referenced object", "reference object", "obj name", "object name", "name"])
+            col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
+            col_m_type = find_column(m_cols, ["reference object type", "refernce object type", "sapobjecttype", "object type", "obj type", "type"])
+            col_m_name = find_column(m_cols, ["reference object name", "referenced object", "refernce object", "reference object", "sapobjectname", "obj name", "object name", "name"])
             col_m_scope = find_column(m_cols, ["functional assessment", "scope", "cat", "track"])
-            col_m_sst = find_column(m_cols, ["sst action", "sst_action", "automated"])
+            col_m_sst = find_column(m_cols, ["sst action", "sst_action", "automated", "sst", "action"])
             col_m_comments = find_column(m_cols, ["comments", "comment", "notes"])
 
             if col_m_note and col_m_name and col_m_type and col_m_scope:
                 for _, row in master_df.dropna(subset=[col_m_note]).iterrows():
-                    key = (
-                        clean_val(row[col_m_note]),
-                        clean_val(row[col_m_name]),
-                        clean_val(row[col_m_type]),
-                    )
-                    lookup[key] = {
-                        "scope": str(row[col_m_scope]).strip(),
-                        "sst_action": str(row[col_m_sst]).strip() if col_m_sst and not pd.isna(row[col_m_sst]) else "",
-                        "comments": str(row[col_m_comments]).strip() if col_m_comments and not pd.isna(row[col_m_comments]) else ""
-                    }
+                    clean_note = clean_val(row[col_m_note])
+                    clean_name = clean_val(row[col_m_name])
+                    clean_type = clean_val(row[col_m_type])
+
+                    key = (clean_note, clean_name, clean_type)
+                    
+                    scope_val = str(row[col_m_scope]).strip() if not pd.isna(row[col_m_scope]) else ""
+                    sst_val = str(row[col_m_sst]).strip() if col_m_sst and not pd.isna(row[col_m_sst]) else ""
+                    comment_val = str(row[col_m_comments]).strip() if col_m_comments and not pd.isna(row[col_m_comments]) else ""
+
+                    # Primary 3-part composite lookup
+                    if key not in lookup_3part or not lookup_3part[key]["scope"]:
+                        lookup_3part[key] = {
+                            "scope": scope_val,
+                            "sst_action": sst_val,
+                            "comments": comment_val
+                        }
+
+                    # Secondary Note-only fallback lookup
+                    if clean_note:
+                        if clean_note not in note_fallback or not note_fallback[clean_note]["scope"]:
+                            note_fallback[clean_note] = {
+                                "scope": scope_val,
+                                "sst_action": sst_val,
+                                "comments": comment_val
+                            }
+
         except Exception as e:
             st.error(f"Error reading master dataset: {e}")
-    return lookup
+            
+    return lookup_3part, note_fallback
 
-master_lookup = load_master_lookup(HARDCODED_MASTER_PATH)
+master_lookup, note_fallback_lookup = load_master_lookup(HARDCODED_MASTER_PATH)
 
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
@@ -1618,7 +1638,7 @@ elif st.session_state["step"] == "processing":
     
     # Process Logic Execution
     fresh_cols = list(fresh_df.columns)
-    col_f_note = find_column(fresh_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note"])
+    col_f_note = find_column(fresh_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
     col_f_type = find_column(fresh_cols, ["reference object type", "refernce object type", "sapobjecttype", "object type", "obj type", "type"])
     col_f_name = find_column(fresh_cols, ["reference object name", "referenced object", "refernce object", "reference object", "sapobjectname", "obj name", "object name", "name"])
     col_f_msg = find_column(fresh_cols, ["check message", "check_message", "message", "msg"])
@@ -1645,10 +1665,9 @@ elif st.session_state["step"] == "processing":
 
             has_db_op = any(op in msg_val for op in DB_OPERATIONS)
             fresh_key = (note_val, name_val, type_val)
-            master_data = master_lookup.get(fresh_key, {})
 
             # -------------------------------------------------------------
-            # RULE 0: Blank Note Number Check (UPDATED)
+            # RULE 0: Blank Note Number Check
             # -------------------------------------------------------------
             if not note_val or note_val == "":
                 assigned_assessment = "HCC/HPO"
@@ -1656,67 +1675,92 @@ elif st.session_state["step"] == "processing":
                 automated_val = "#N/A"
                 comment_val = ""
 
-            # RULE 1: Hard Override
-            elif note_val == "1912445":
-                assigned_assessment = "HCC/HPO"
+            # -------------------------------------------------------------
+            # RULE 1: Exact 3-Part Key Master Match (FIRST PRIORITY)
+            # -------------------------------------------------------------
+            elif fresh_key in master_lookup and master_lookup[fresh_key].get("scope"):
+                master_entry = master_lookup[fresh_key]
+                assigned_assessment = master_entry["scope"]
                 status = "Matched"
-                automated_val = master_data.get("sst_action", "")
-                comment_val = master_data.get("comments", "")
+                automated_val = master_entry["sst_action"]
+                comment_val = master_entry["comments"]
 
-            # RULE 2: Direct Technical Notes
-            elif note_val in DIRECT_TECHNICAL_NOTES:
-                assigned_assessment = "Technical"
-                status = "Matched"
-                automated_val = master_data.get("sst_action", "")
-                comment_val = master_data.get("comments", "")
-
-            # RULE 3: Special Note 2198647
+            # -------------------------------------------------------------
+            # RULE 2: Special Note 2198647 Override (Checked after 3-part lookup)
+            # -------------------------------------------------------------
             elif note_val == "2198647" and has_db_op:
                 if "VBFA" in name_val:
                     assigned_assessment = "Technical"
                     status = "Matched"
-                    automated_val = master_data.get("sst_action", "")
-                    comment_val = master_data.get("comments", "")
+                    master_entry = note_fallback_lookup.get(note_val, {})
+                    automated_val = master_entry.get("sst_action", "")
+                    comment_val = master_entry.get("comments", "")
                 elif any(obj in name_val for obj in ["VBUP", "VBUK"]):
                     assigned_assessment = "Functional"
                     status = "Matched"
-                    automated_val = "N/A"
-                    comment_val = master_data.get("comments", "")
-                else:
-                    if fresh_key in master_lookup:
-                        assigned_assessment = master_data.get("scope", "")
-                        status = "Matched"
-                        automated_val = master_data.get("sst_action", "")
-                        comment_val = master_data.get("comments", "")
-                    else:
-                        assigned_assessment = "New / Unmapped Note"
-                        status = "Not Found"
-                        automated_val = ""
-                        comment_val = ""
-
-            # RULE 4: Specific DB-Operation Notes Override List
-            elif note_val in DB_OPERATION_NOTES and has_db_op:
-                assigned_assessment = DB_OPERATION_NOTES[note_val]
-                status = "Matched"
-                automated_val = master_data.get("sst_action", "")
-                comment_val = master_data.get("comments", "")
-
-            # DEFAULT: Master Database Lookup
-            else:
-                if fresh_key in master_lookup:
-                    assigned_assessment = master_data.get("scope", "")
+                    automated_val = "NA"
+                    comment_val = note_fallback_lookup.get(note_val, {}).get("comments", "")
+                elif note_val in note_fallback_lookup and note_fallback_lookup[note_val].get("scope"):
+                    master_entry = note_fallback_lookup[note_val]
+                    assigned_assessment = master_entry["scope"]
                     status = "Matched"
-                    automated_val = master_data.get("sst_action", "")
-                    comment_val = master_data.get("comments", "")
+                    automated_val = master_entry["sst_action"]
+                    comment_val = master_entry["comments"]
                 else:
                     assigned_assessment = "New / Unmapped Note"
                     status = "Not Found"
                     automated_val = ""
                     comment_val = ""
 
-            # Force Automated to "N/A" whenever Functional Assessment is "Functional"
+            # -------------------------------------------------------------
+            # RULE 3: Direct Technical Notes
+            # -------------------------------------------------------------
+            elif note_val in DIRECT_TECHNICAL_NOTES:
+                assigned_assessment = "Technical"
+                status = "Matched"
+                master_entry = note_fallback_lookup.get(note_val, {})
+                automated_val = master_entry.get("sst_action", "")
+                comment_val = master_entry.get("comments", "")
+
+            # -------------------------------------------------------------
+            # RULE 4: Special Note 1912445
+            # -------------------------------------------------------------
+            elif note_val == "1912445":
+                assigned_assessment = "HCC/HPO"
+                status = "Matched"
+                master_entry = note_fallback_lookup.get(note_val, {})
+                automated_val = master_entry.get("sst_action", "")
+                comment_val = master_entry.get("comments", "")
+
+            # -------------------------------------------------------------
+            # RULE 5: DB-Operation Override Notes
+            # -------------------------------------------------------------
+            elif note_val in DB_OPERATION_NOTES and has_db_op:
+                assigned_assessment = DB_OPERATION_NOTES[note_val]
+                status = "Matched"
+                master_entry = note_fallback_lookup.get(note_val, {})
+                automated_val = master_entry.get("sst_action", "")
+                comment_val = master_entry.get("comments", "")
+
+            # -------------------------------------------------------------
+            # RULE 6: Secondary Note-Level Fallback Match in Master Sheet
+            # -------------------------------------------------------------
+            elif note_val in note_fallback_lookup and note_fallback_lookup[note_val].get("scope"):
+                master_entry = note_fallback_lookup[note_val]
+                assigned_assessment = master_entry["scope"]
+                status = "Matched"
+                automated_val = master_entry["sst_action"]
+                comment_val = master_entry["comments"]
+
+            else:
+                assigned_assessment = "New / Unmapped Note"
+                status = "Not Found"
+                automated_val = ""
+                comment_val = ""
+
+            # STRICT RULE: Force Automated to "NA" whenever Functional Assessment is "Functional"
             if assigned_assessment.upper() == "FUNCTIONAL":
-                automated_val = "N/A"
+                automated_val = "NA"
 
             assessment_list.append(assigned_assessment)
             match_status_list.append(status)
