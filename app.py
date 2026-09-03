@@ -1450,7 +1450,7 @@ def find_column(columns, keywords_priority):
     return None
 
 # -------------------------------------------------------------
-# Cached Master File Lookup & Secondary Fallback Index
+# Cached Master File Lookup
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_master_lookup(file_path):
@@ -1459,7 +1459,8 @@ def load_master_lookup(file_path):
     
     if os.path.exists(file_path):
         try:
-            master_df = pd.read_excel(file_path)
+            # keep_default_na=False stops Pandas from turning 'NA' strings into NaN
+            master_df = pd.read_excel(file_path, keep_default_na=False)
             m_cols = list(master_df.columns)
 
             col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
@@ -1470,19 +1471,22 @@ def load_master_lookup(file_path):
             col_m_comments = find_column(m_cols, ["comments", "comment", "notes"])
 
             if col_m_note and col_m_name and col_m_type and col_m_scope:
-                for _, row in master_df.dropna(subset=[col_m_note]).iterrows():
+                for _, row in master_df.iterrows():
                     clean_note = clean_val(row[col_m_note])
                     clean_name = clean_val(row[col_m_name])
                     clean_type = clean_val(row[col_m_type])
 
+                    if not clean_note:
+                        continue
+
                     key = (clean_note, clean_name, clean_type)
                     
-                    scope_val = str(row[col_m_scope]).strip() if not pd.isna(row[col_m_scope]) else ""
-                    sst_val = str(row[col_m_sst]).strip() if col_m_sst and not pd.isna(row[col_m_sst]) else ""
-                    comment_val = str(row[col_m_comments]).strip() if col_m_comments and not pd.isna(row[col_m_comments]) else ""
+                    scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
+                    sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
+                    comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
 
                     # Primary 3-part composite lookup
-                    if key not in lookup_3part or not lookup_3part[key]["scope"]:
+                    if key not in lookup_3part or lookup_3part[key]["scope"] in ["", "NAN"]:
                         lookup_3part[key] = {
                             "scope": scope_val,
                             "sst_action": sst_val,
@@ -1491,7 +1495,7 @@ def load_master_lookup(file_path):
 
                     # Secondary Note-only fallback lookup
                     if clean_note:
-                        if clean_note not in note_fallback or not note_fallback[clean_note]["scope"]:
+                        if clean_note not in note_fallback or note_fallback[clean_note]["scope"] in ["", "NAN"]:
                             note_fallback[clean_note] = {
                                 "scope": scope_val,
                                 "sst_action": sst_val,
@@ -1620,9 +1624,9 @@ elif st.session_state["step"] == "processing":
     time.sleep(0.3)
 
     if user_file.name.endswith(".csv"):
-        fresh_df = pd.read_csv(user_file)
+        fresh_df = pd.read_csv(user_file, keep_default_na=False)
     else:
-        fresh_df = pd.read_excel(user_file)
+        fresh_df = pd.read_excel(user_file, keep_default_na=False)
 
     row_count = len(fresh_df)
     progress_bar.progress(20)
@@ -1678,7 +1682,7 @@ elif st.session_state["step"] == "processing":
             # -------------------------------------------------------------
             # RULE 1: Exact 3-Part Key Master Match (FIRST PRIORITY)
             # -------------------------------------------------------------
-            elif fresh_key in master_lookup and master_lookup[fresh_key].get("scope"):
+            elif fresh_key in master_lookup and master_lookup[fresh_key].get("scope") not in ["", "NAN"]:
                 master_entry = master_lookup[fresh_key]
                 assigned_assessment = master_entry["scope"]
                 status = "Matched"
@@ -1686,7 +1690,7 @@ elif st.session_state["step"] == "processing":
                 comment_val = master_entry["comments"]
 
             # -------------------------------------------------------------
-            # RULE 2: Special Note 2198647 Override (Checked after 3-part lookup)
+            # RULE 2: Special Note 2198647 Override
             # -------------------------------------------------------------
             elif note_val == "2198647" and has_db_op:
                 if "VBFA" in name_val:
@@ -1700,7 +1704,7 @@ elif st.session_state["step"] == "processing":
                     status = "Matched"
                     automated_val = "NA"
                     comment_val = note_fallback_lookup.get(note_val, {}).get("comments", "")
-                elif note_val in note_fallback_lookup and note_fallback_lookup[note_val].get("scope"):
+                elif note_val in note_fallback_lookup and note_fallback_lookup[note_val].get("scope") not in ["", "NAN"]:
                     master_entry = note_fallback_lookup[note_val]
                     assigned_assessment = master_entry["scope"]
                     status = "Matched"
@@ -1745,7 +1749,7 @@ elif st.session_state["step"] == "processing":
             # -------------------------------------------------------------
             # RULE 6: Secondary Note-Level Fallback Match in Master Sheet
             # -------------------------------------------------------------
-            elif note_val in note_fallback_lookup and note_fallback_lookup[note_val].get("scope"):
+            elif note_val in note_fallback_lookup and note_fallback_lookup[note_val].get("scope") not in ["", "NAN"]:
                 master_entry = note_fallback_lookup[note_val]
                 assigned_assessment = master_entry["scope"]
                 status = "Matched"
