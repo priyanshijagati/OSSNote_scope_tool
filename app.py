@@ -5,8 +5,20 @@ import time
 import streamlit as st
 import pandas as pd
 
-# Define local master file path
-HARDCODED_MASTER_PATH = "master_data.xlsx"
+# -------------------------------------------------------------
+# Linux/Cloud Safe Master File Path Resolver
+# -------------------------------------------------------------
+def resolve_master_path():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    primary = os.path.join(base_dir, "master_data.xlsx")
+    if os.path.exists(primary):
+        return primary
+    for f in os.listdir(base_dir):
+        if f.lower().startswith("master_data") and f.lower().endswith((".xlsx", ".xls")):
+            return os.path.join(base_dir, f)
+    return primary
+
+HARDCODED_MASTER_PATH = resolve_master_path()
 
 # -------------------------------------------------------------
 # Custom Override Rules Configuration
@@ -339,17 +351,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Deep Cleaning Helper
+# Deep Cleaning Helper with Linux/Cloud Control Character & Float Sanitization
 def clean_val(val):
-    if pd.isna(val) or val is None:
+    if pd.isna(val) or val is None or str(val).strip() == "":
         return ""
+    
     if isinstance(val, (int, float)):
-        val_str = str(int(val)) if float(val).is_integer() else str(val)
+        try:
+            val_str = str(int(float(val))) if float(val).is_integer() else str(val)
+        except (ValueError, OverflowError):
+            val_str = str(val)
     else:
         val_str = str(val)
     
-    val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF]', ' ', val_str)
+    val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', val_str)
     val_str = re.sub(r'\s+', ' ', val_str).strip()
+    
+    if val_str.endswith(".0"):
+        val_str = val_str[:-2]
+        
     return val_str.upper()
 
 def find_column(columns, keywords_priority):
@@ -376,14 +396,13 @@ STRICT_REF_NAME_KEYWORDS = [
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path):
+def load_master_lookup(file_path, cache_buster="v35"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
     
     if os.path.exists(file_path):
         try:
-            # keep_default_na=False retains literal 'NA' strings without turning them into NaN
             master_df = pd.read_excel(file_path, keep_default_na=False)
             m_cols = list(master_df.columns)
 
@@ -393,10 +412,10 @@ def load_master_lookup(file_path):
             col_m_scope = find_column(m_cols, ["functional assessment", "scope", "cat", "track"])
             col_m_sst = find_column(m_cols, ["sst action", "sst_action", "automated", "sst", "action"])
             
-            # Explicitly target Column N ("Comments"), ignoring "Additional comments"
+            # Target Column N ("Comments", Index 13)
             col_m_comments = None
             if len(m_cols) >= 14:
-                col_m_comments = m_cols[13] # Column N is 0-indexed as 13
+                col_m_comments = m_cols[13]
             if not col_m_comments or "additional" in str(col_m_comments).lower():
                 for c in m_cols:
                     if "comment" in str(c).lower() and "additional" not in str(c).lower():
@@ -418,18 +437,22 @@ def load_master_lookup(file_path):
                     note_objects_map[clean_note].add(clean_name)
                     note_objects_map[clean_note].add(clean_type)
 
-                    # Store BOTH key ordering combinations to handle column order swaps (e.g. ("VTTK", "TABL") = ("TABL", "VTTK"))
                     key_a = (clean_note, clean_name, clean_type)
                     key_b = (clean_note, clean_type, clean_name)
                     
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
-                    comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
+                    
+                    raw_comment = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
+                    raw_comment = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', raw_comment).strip()
+
+                    if raw_comment.upper() in ["NAN", "NONE", "NULL", ""]:
+                        raw_comment = ""
 
                     data_obj = {
                         "scope": scope_val,
                         "sst_action": sst_val,
-                        "comments": comment_val
+                        "comments": raw_comment
                     }
 
                     lookup_3part[key_a] = data_obj
@@ -456,7 +479,7 @@ with header_col1:
                 </div>
             </div>
             <div class="version-badge">
-                🟢 {HARDCODED_MASTER_PATH} · v19
+                🟢 {HARDCODED_MASTER_PATH} · v35
             </div>
         </div>
     """,
@@ -477,7 +500,7 @@ with header_col2:
 if "step" not in st.session_state:
     st.session_state["step"] = "upload"
 
-# STEP 1: SINGLE FILE UPLOAD SCREEN (Original UI)
+# STEP 1: SINGLE FILE UPLOAD SCREEN
 if st.session_state["step"] == "upload":
     st.markdown('<div class="main-heading">Drop in your ATC extract — we\'ll scope every row.</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-heading">No setup, no configuration. We match each finding against the master reference on Note Number + Reference Object, then hand back your file untouched with new columns.</div>', unsafe_allow_html=True)
@@ -508,7 +531,6 @@ if st.session_state["step"] == "upload":
         unsafe_allow_html=True
     )
 
-    # Original Single File Uploader
     user_file = st.file_uploader("", type=["csv", "xlsx"], key="triplet_uploader")
 
     if user_file is not None:
@@ -536,7 +558,7 @@ elif st.session_state["step"] == "processing":
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step2}</span> Loading master reference</span>
-                <span class="step-meta">v19 · {len(master_lookup)//2:,} notes</span>
+                <span class="step-meta">v35 · {len(master_lookup)//2:,} notes</span>
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step3}</span> Normalising note numbers & referenced keys</span>
@@ -573,7 +595,6 @@ elif st.session_state["step"] == "processing":
     progress_bar.progress(60)
     render_steps(step1="✅", step2="✅", step3="🔵", row_count=f"{row_count:,}")
     
-    # Strictly target REFERENCED Object Type & REFERENCED Object Name columns
     fresh_cols = list(fresh_df.columns)
     col_f_note = find_column(fresh_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
     col_f_type = find_column(fresh_cols, STRICT_REF_TYPE_KEYWORDS)
@@ -609,6 +630,17 @@ elif st.session_state["step"] == "processing":
             master_entry = master_lookup.get(key_a) or master_lookup.get(key_b) or {}
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
 
+            # =================================----------------------------
+            # STRICT DECOUPLED COMMENT RESOLUTION (Evaluated First)
+            # Looks strictly at 3-part key in master data.
+            # No other rule (Direct Tech, DB Op, etc.) can override or wipe this.
+            # =================================----------------------------
+            comment_val = ""
+            if is_in_master:
+                raw_c = str(master_entry.get("comments", "")).strip()
+                if raw_c.upper() not in ["NAN", "NONE", "NULL", ""]:
+                    comment_val = raw_c
+
             # -------------------------------------------------------------
             # RULE 0: Blank Note Number
             # -------------------------------------------------------------
@@ -616,70 +648,58 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = "#N/A"
-                comment_val = ""
                 debug_reason = "Matched via Blank Note Number rule"
 
             # -------------------------------------------------------------
             # RULE 1: Direct Technical Notes Override
-            # (Direct Technical Notes NEVER query master_data.xlsx, Automated forced to "Semi-Automatic")
             # -------------------------------------------------------------
             elif note_val in DIRECT_TECHNICAL_NOTES:
                 assigned_assessment = "Technical"
                 status = "Matched"
                 automated_val = "Semi-Automatic"
-                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Direct Technical Note list ({note_val})"
 
             # -------------------------------------------------------------
-            # RULE 2: Special Note 2198647 Manual DB Operation Check (FIRST)
-            # (Executes ONLY if Check Message contains a valid DB Operation keyword)
+            # RULE 2: Special Note 2198647 Manual DB Operation Check
             # -------------------------------------------------------------
             elif note_val == "2198647" and has_db_op:
                 if "VBFA" in name_val:
                     assigned_assessment = "Technical"
                     status = "Matched"
                     automated_val = master_entry.get("sst_action", "")
-                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBFA DB Op rule"
                 elif any(obj in name_val for obj in ["VBUP", "VBUK"]):
                     assigned_assessment = "Functional"
                     status = "Matched"
                     automated_val = "NA"
-                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBUP/VBUK DB Op rule"
                 elif is_in_master:
                     assigned_assessment = master_entry["scope"]
                     status = "Matched"
                     automated_val = master_entry["sst_action"]
-                    comment_val = master_entry["comments"]
                     debug_reason = "Matched via Note 2198647 Master Data Fallback"
                 else:
                     assigned_assessment = "New / Unmapped Note"
                     status = "Not Found"
                     automated_val = ""
-                    comment_val = ""
                     debug_reason = "Note 2198647 DB Op present but Referenced Object mismatch"
 
             # -------------------------------------------------------------
-            # RULE 3: DB Operation Notes Manual Override (FIRST)
-            # (Executes ONLY if Check Message contains a valid DB Operation keyword)
+            # RULE 3: DB Operation Notes Manual Override
             # -------------------------------------------------------------
             elif note_val in DB_OPERATION_NOTES and has_db_op:
                 assigned_assessment = DB_OPERATION_NOTES[note_val]
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
-                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Manual DB Operation keyword rule ({note_val})"
 
             # -------------------------------------------------------------
             # RULE 4: Primary Master Sheet Composite Key Match
-            # (Triggered for all non-direct technical notes OR DB notes whose message lacks DB keywords)
             # -------------------------------------------------------------
             elif is_in_master:
                 assigned_assessment = master_entry["scope"]
                 status = "Matched"
                 automated_val = master_entry["sst_action"]
-                comment_val = master_entry["comments"]
                 debug_reason = "Matched via Master Data Referenced Object 3-part key lookup"
 
             # -------------------------------------------------------------
@@ -689,7 +709,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
-                comment_val = master_entry.get("comments", "")
                 debug_reason = "Matched via Special Note 1912445 rule"
 
             # -------------------------------------------------------------
@@ -699,9 +718,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "New / Unmapped Note"
                 status = "Not Found"
                 automated_val = ""
-                comment_val = ""
 
-                # Diagnostic Reason Generation on REFERENCED Objects
                 if note_val not in notes_set:
                     debug_reason = f"Note ID '{note_val}' not present in Master Data reference"
                 else:
@@ -733,10 +750,8 @@ elif st.session_state["step"] == "processing":
         progress_bar.progress(100)
         render_steps(step1="✅", step2="✅", step3="✅", step4="✅", step5="✅", row_count=f"{row_count:,}")
         
-        # Display "Please wait" message
         wait_placeholder.markdown('<div class="wait-message">⏳ Please wait, loading dashboard...</div>', unsafe_allow_html=True)
 
-        # Save results and prepare file name: Scoped_<original_name>
         st.session_state["processed_df"] = output_df
         export_filename = f"Scoped_{user_file.name}"
         
