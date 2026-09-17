@@ -396,14 +396,15 @@ STRICT_REF_NAME_KEYWORDS = [
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path, cache_buster="v35"):
+def load_master_lookup(file_path, cache_buster="v36_force_col_n"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
+    comments_loaded_count = 0
     
     if os.path.exists(file_path):
         try:
-            master_df = pd.read_excel(file_path, keep_default_na=False)
+            master_df = pd.read_excel(file_path, keep_default_na=False, dtype=str)
             m_cols = list(master_df.columns)
 
             col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
@@ -412,15 +413,12 @@ def load_master_lookup(file_path, cache_buster="v35"):
             col_m_scope = find_column(m_cols, ["functional assessment", "scope", "cat", "track"])
             col_m_sst = find_column(m_cols, ["sst action", "sst_action", "automated", "sst", "action"])
             
-            # Target Column N ("Comments", Index 13)
+            # Direct Position Fallback: Column N is 0-indexed position 13
             col_m_comments = None
-            if len(m_cols) >= 14:
+            if len(m_cols) > 13:
                 col_m_comments = m_cols[13]
-            if not col_m_comments or "additional" in str(col_m_comments).lower():
-                for c in m_cols:
-                    if "comment" in str(c).lower() and "additional" not in str(c).lower():
-                        col_m_comments = c
-                        break
+            else:
+                col_m_comments = find_column(m_cols, ["comment", "comments", "remark"])
 
             if col_m_note and col_m_name and col_m_type and col_m_scope:
                 for _, row in master_df.iterrows():
@@ -443,11 +441,15 @@ def load_master_lookup(file_path, cache_buster="v35"):
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
                     
-                    raw_comment = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
-                    raw_comment = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', raw_comment).strip()
+                    raw_comment = ""
+                    if col_m_comments and row[col_m_comments] is not None:
+                        raw_comment = str(row[col_m_comments]).strip()
+                        raw_comment = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', raw_comment).strip()
 
-                    if raw_comment.upper() in ["NAN", "NONE", "NULL", ""]:
+                    if raw_comment.upper() in ["NAN", "NONE", "NULL", "<NA>", ""]:
                         raw_comment = ""
+                    else:
+                        comments_loaded_count += 1
 
                     data_obj = {
                         "scope": scope_val,
@@ -461,9 +463,11 @@ def load_master_lookup(file_path, cache_buster="v35"):
         except Exception as e:
             st.error(f"Error reading master dataset: {e}")
             
-    return lookup_3part, notes_set, note_objects_map
+    return lookup_3part, notes_set, note_objects_map, comments_loaded_count
 
-master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH)
+master_lookup, notes_set, note_objects_map, comments_loaded_count = load_master_lookup(HARDCODED_MASTER_PATH)
+
+st.warning(f"DEBUG: Master Keys in Memory = {len(master_lookup)} | Non-Blank Comments Loaded = {comments_loaded_count}")
 
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
@@ -479,7 +483,7 @@ with header_col1:
                 </div>
             </div>
             <div class="version-badge">
-                🟢 {HARDCODED_MASTER_PATH} · v35
+                🟢 {HARDCODED_MASTER_PATH} · v36
             </div>
         </div>
     """,
@@ -558,7 +562,7 @@ elif st.session_state["step"] == "processing":
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step2}</span> Loading master reference</span>
-                <span class="step-meta">v35 · {len(master_lookup)//2:,} notes</span>
+                <span class="step-meta">v36 · {len(master_lookup)//2:,} notes</span>
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step3}</span> Normalising note numbers & referenced keys</span>
@@ -579,9 +583,9 @@ elif st.session_state["step"] == "processing":
     time.sleep(0.3)
 
     if user_file.name.endswith(".csv"):
-        fresh_df = pd.read_csv(user_file, keep_default_na=False)
+        fresh_df = pd.read_csv(user_file, keep_default_na=False, dtype=str)
     else:
-        fresh_df = pd.read_excel(user_file, keep_default_na=False)
+        fresh_df = pd.read_excel(user_file, keep_default_na=False, dtype=str)
 
     row_count = len(fresh_df)
     progress_bar.progress(20)
@@ -631,14 +635,13 @@ elif st.session_state["step"] == "processing":
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
 
             # =================================----------------------------
-            # STRICT DECOUPLED COMMENT RESOLUTION (Evaluated First)
-            # Looks strictly at 3-part key in master data.
-            # No other rule (Direct Tech, DB Op, etc.) can override or wipe this.
+            # STRICT DECOUPLED COMMENT RESOLUTION
+            # Looks strictly at Column N in master data.
             # =================================----------------------------
             comment_val = ""
             if is_in_master:
                 raw_c = str(master_entry.get("comments", "")).strip()
-                if raw_c.upper() not in ["NAN", "NONE", "NULL", ""]:
+                if raw_c.upper() not in ["NAN", "NONE", "NULL", "<NA>", ""]:
                     comment_val = raw_c
 
             # -------------------------------------------------------------
