@@ -497,7 +497,7 @@ if st.session_state["step"] == "upload":
             </div>
             <div class="guide-step-row">
                 <span class="guide-badge">3</span>
-                <div><b>Scope Categorization:</b> It will assign object functional assessment as <b>Technical</b>, <b>Functional</b>, <b>HCC/HPO</b>, or <b>Unmapped</b> based on OSS Note Number, Reference Object Name, Object Type (and Check Message column for a few unique note numbers) with a separate count of each.</div>
+                <div><b>Scope Categorization:</b> It will assign object functional assessment as <b>Technical</b>, <b>Functional</b>, <b>HCC/HPO</b>, or <b>Unmapped</b> based on OSS Note Number,Check message, Reference Object Name, Object Type (and Check Message column for a few unique note numbers) with a separate count of each.</div>
             </div>
             <div class="guide-step-row">
                 <span class="guide-badge">4</span>
