@@ -376,7 +376,7 @@ STRICT_REF_NAME_KEYWORDS = [
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path):
+def load_master_lookup(file_path, file_mtime):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
@@ -385,6 +385,10 @@ def load_master_lookup(file_path):
         try:
             # keep_default_na=False retains literal 'NA' strings without turning them into NaN
             master_df = pd.read_excel(file_path, keep_default_na=False)
+            
+            #checking comments count
+            st.write("DEBUG master shape:", master_df.shape)
+            st.write("DEBUG master columns:", list(master_df.columns))
             m_cols = list(master_df.columns)
 
             col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
@@ -395,13 +399,20 @@ def load_master_lookup(file_path):
             
             # Explicitly target Column N ("Comments"), ignoring "Additional comments"
             col_m_comments = None
-            if len(m_cols) >= 14:
-                col_m_comments = m_cols[13] # Column N is 0-indexed as 13
-            if not col_m_comments or "additional" in str(col_m_comments).lower():
-                for c in m_cols:
-                    if "comment" in str(c).lower() and "additional" not in str(c).lower():
-                        col_m_comments = c
-                        break
+            for c in m_cols:
+                header = str(c).strip().lower()
+                if header == "comments":
+                    col_m_comments = c
+                    break
+                # Fallback: find a column containing "comment",
+                # but never use "additional comments"
+                if col_m_comments is None:
+                   for c in m_cols:
+                       header = str(c).strip().lower()
+
+                if "comment" in header and "additional" not in header:
+                   col_m_comments = c
+                   break
 
             if col_m_note and col_m_name and col_m_type and col_m_scope:
                 for _, row in master_df.iterrows():
@@ -425,7 +436,19 @@ def load_master_lookup(file_path):
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
                     comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
+                    
+                    #checking comment count 
+                    if col_m_comments:
+                        non_blank_comments = (
+                            master_df[col_m_comments]
+                            .astype(str)
+                            .str.strip()
+                            .ne("")
+                          .sum()
+                        )
 
+                        st.write("DEBUG Comments column:", col_m_comments)
+                        st.write("DEBUG Non-blank comments:", non_blank_comments)
                     data_obj = {
                         "scope": scope_val,
                         "sst_action": sst_val,
@@ -440,7 +463,12 @@ def load_master_lookup(file_path):
             
     return lookup_3part, notes_set, note_objects_map
 
-master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH)
+master_mtime = os.path.getmtime(HARDCODED_MASTER_PATH)
+
+master_lookup, notes_set, note_objects_map = load_master_lookup(
+    HARDCODED_MASTER_PATH,
+    master_mtime
+)
 
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
@@ -497,7 +525,7 @@ if st.session_state["step"] == "upload":
             </div>
             <div class="guide-step-row">
                 <span class="guide-badge">3</span>
-                <div><b>Scope Categorization:</b> It will assign object functional assessment as <b>Technical</b>, <b>Functional</b>, <b>HCC/HPO</b>, or <b>Unmapped</b> based on OSS Note Number,Check message, Reference Object Name, Object Type (and Check Message column for a few unique note numbers) with a separate count of each.</div>
+                <div><b>Scope Categorization:</b> It will assign object functional assessment as <b>Technical</b>, <b>Functional</b>, <b>HCC/HPO</b>, or <b>Unmapped</b> based on OSS Note Number, Reference Object Name, Object Type (and Check Message column for a few unique note numbers) with a separate count of each.</div>
             </div>
             <div class="guide-step-row">
                 <span class="guide-badge">4</span>
