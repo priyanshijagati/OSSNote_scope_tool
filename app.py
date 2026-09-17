@@ -631,6 +631,9 @@ elif st.session_state["step"] == "processing":
             key_a = (note_val, name_val, type_val)
             key_b = (note_val, type_val, name_val)
 
+            if idx == 0:
+                st.error(f"🔍 EXTRACT ROW 1 KEY: {repr(key_a)} | MATCH IN MASTER: {key_a in master_lookup}")
+
             master_entry = master_lookup.get(key_a) or master_lookup.get(key_b) or {}
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
 
