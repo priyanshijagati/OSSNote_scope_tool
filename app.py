@@ -613,6 +613,9 @@ elif st.session_state["step"] == "processing":
         debug_reason_list = []
 
         for idx, row in fresh_df.iterrows():
+            st.warning(f"DEBUG - Detected Note Column: '{col_f_note}'")
+            st.warning(f"DEBUG - Detected Ref Name Column: '{col_f_name}'")
+            st.warning(f"DEBUG - Detected Ref Type Column: '{col_f_type}'")
             note_val = clean_val(row[col_f_note])
             name_val = clean_val(row[col_f_name])  # Strictly Referenced Object Name
             type_val = clean_val(row[col_f_type])  # Strictly Referenced Object Type
