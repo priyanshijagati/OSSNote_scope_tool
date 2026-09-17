@@ -6,7 +6,18 @@ import streamlit as st
 import pandas as pd
 
 # Define local master file path
-HARDCODED_MASTER_PATH = "master_data.xlsx"
+# Linux/Cloud safe path resolver
+def resolve_master_path():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    primary = os.path.join(base_dir, "master_data.xlsx")
+    if os.path.exists(primary):
+        return primary
+    for f in os.listdir(base_dir):
+        if f.lower().startswith("master_data") and f.lower().endswith((".xlsx", ".xls")):
+            return os.path.join(base_dir, f)
+    return primary
+
+HARDCODED_MASTER_PATH = resolve_master_path()
 
 # -------------------------------------------------------------
 # Custom Override Rules Configuration
@@ -376,7 +387,7 @@ STRICT_REF_NAME_KEYWORDS = [
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path):
+def load_master_lookup(file_path, cache_buster="v32"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
@@ -597,7 +608,7 @@ elif st.session_state["step"] == "processing":
         comments_list = []
         debug_reason_list = []
 
-        for idx, row in fresh_df.iterrows():
+       for idx, row in fresh_df.iterrows():
             note_val = clean_val(row[col_f_note])
             name_val = clean_val(row[col_f_name])  # Strictly Referenced Object Name
             type_val = clean_val(row[col_f_type])  # Strictly Referenced Object Type
