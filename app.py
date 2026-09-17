@@ -359,7 +359,7 @@ def clean_val(val):
     else:
         val_str = str(val)
     
-    val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF]', ' ', val_str)
+    val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', val_str)
     val_str = re.sub(r'\s+', ' ', val_str).strip()
     return val_str.upper()
 
@@ -386,8 +386,11 @@ STRICT_REF_NAME_KEYWORDS = [
 # -------------------------------------------------------------
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
+# -------------------------------------------------------------
+# Cached Master File Lookup Engine
+# -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path, cache_buster="v33"):
+def load_master_lookup(file_path, cache_buster="v34"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
@@ -429,22 +432,22 @@ def load_master_lookup(file_path, cache_buster="v33"):
                     note_objects_map[clean_note].add(clean_name)
                     note_objects_map[clean_note].add(clean_type)
 
-                    # Store BOTH key ordering combinations to handle column order swaps (e.g. ("VTTK", "TABL") = ("TABL", "VTTK"))
                     key_a = (clean_note, clean_name, clean_type)
                     key_b = (clean_note, clean_type, clean_name)
                     
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
                     
-                    comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
-                    comment_val = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF]', ' ', comment_val).strip()
-                    if comment_val.upper() in ["NAN", "NONE", "NULL"]:
-                        comment_val = ""
+                    raw_comment = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
+                    raw_comment = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', raw_comment).strip()
+
+                    if raw_comment.upper() in ["NAN", "NONE", "NULL", ""]:
+                        raw_comment = ""
 
                     data_obj = {
                         "scope": scope_val,
                         "sst_action": sst_val,
-                        "comments": comment_val
+                        "comments": raw_comment
                     }
 
                     lookup_3part[key_a] = data_obj
