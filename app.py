@@ -386,9 +386,7 @@ def load_master_lookup(file_path, file_mtime):
             # keep_default_na=False retains literal 'NA' strings without turning them into NaN
             master_df = pd.read_excel(file_path, keep_default_na=False)
             
-            #checking comments count
-            st.write("DEBUG master shape:", master_df.shape)
-            st.write("DEBUG master columns:", list(master_df.columns))
+            
             m_cols = list(master_df.columns)
 
             col_m_note = find_column(m_cols, ["ossnotenumber", "ossnote", "notenumber", "note num", "note", "sap no"])
@@ -437,18 +435,7 @@ def load_master_lookup(file_path, file_mtime):
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
                     comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
                     
-                    #checking comment count 
-                    if col_m_comments:
-                        non_blank_comments = (
-                            master_df[col_m_comments]
-                            .astype(str)
-                            .str.strip()
-                            .ne("")
-                          .sum()
-                        )
-
-                        st.write("DEBUG Comments column:", col_m_comments)
-                        st.write("DEBUG Non-blank comments:", non_blank_comments)
+                    
                     data_obj = {
                         "scope": scope_val,
                         "sst_action": sst_val,
