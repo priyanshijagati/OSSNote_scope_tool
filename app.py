@@ -352,15 +352,26 @@ st.markdown(
 
 # Deep Cleaning Helper
 def clean_val(val):
-    if pd.isna(val) or val is None:
+    if pd.isna(val) or val is None or str(val).strip() == "":
         return ""
+    
+    # Handle floats/ints properly across Linux and Windows
     if isinstance(val, (int, float)):
-        val_str = str(int(val)) if float(val).is_integer() else str(val)
+        try:
+            val_str = str(int(float(val))) if float(val).is_integer() else str(val)
+        except (ValueError, OverflowError):
+            val_str = str(val)
     else:
         val_str = str(val)
     
+    # Strip non-breaking spaces and hidden line breaks
     val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', val_str)
     val_str = re.sub(r'\s+', ' ', val_str).strip()
+    
+    # Remove trailing ".0" if Pandas stored integer as float string
+    if val_str.endswith(".0"):
+        val_str = val_str[:-2]
+        
     return val_str.upper()
 
 def find_column(columns, keywords_priority):
