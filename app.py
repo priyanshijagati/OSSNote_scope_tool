@@ -442,6 +442,8 @@ def load_master_lookup(file_path):
 
 master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH)
 
+st.warning(f"DEBUG: Master Keys in Memory = {len(master_lookup)}")
+
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
 with header_col1:
