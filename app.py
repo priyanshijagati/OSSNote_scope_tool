@@ -616,9 +616,6 @@ elif st.session_state["step"] == "processing":
         debug_reason_list = []
 
         for idx, row in fresh_df.iterrows():
-            st.warning(f"DEBUG - Detected Note Column: '{col_f_note}'")
-            st.warning(f"DEBUG - Detected Ref Name Column: '{col_f_name}'")
-            st.warning(f"DEBUG - Detected Ref Type Column: '{col_f_type}'")
             note_val = clean_val(row[col_f_note])
             name_val = clean_val(row[col_f_name])  # Strictly Referenced Object Name
             type_val = clean_val(row[col_f_type])  # Strictly Referenced Object Type
@@ -626,21 +623,24 @@ elif st.session_state["step"] == "processing":
 
             has_db_op = any(op in msg_val for op in DB_OPERATIONS)
             
+            # Construct both key orientations explicitly
             key_a = (note_val, name_val, type_val)
             key_b = (note_val, type_val, name_val)
 
+            # Query master dictionary across both orientations
             master_entry = master_lookup.get(key_a) or master_lookup.get(key_b) or {}
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
 
             # =================================----------------------------
-            # SEPARATE INDEPENDENT RULE FOR COMMENTS COLUMN
-            # Strictly checks 3-part key in master_data.xlsx.
-            # No rules (Direct Tech, DB Op, etc.) can override or influence this.
+            # STRICT DECOUPLED COMMENT RESOLUTION
+            # Looks strictly at 3-part key in master data.
+            # Ignores all other rules (Direct Tech, DB Op, etc.)
             # =================================----------------------------
-            if is_in_master and master_entry.get("comments"):
-                comment_val = master_entry["comments"]
-            else:
-                comment_val = ""
+            comment_val = ""
+            if master_entry:
+                raw_c = str(master_entry.get("comments", "")).strip()
+                if raw_c.upper() not in ["NAN", "NONE", "NULL", ""]:
+                    comment_val = raw_c
 
             # -------------------------------------------------------------
             # RULE 0: Blank Note Number
