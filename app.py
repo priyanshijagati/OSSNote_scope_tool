@@ -6,18 +6,7 @@ import streamlit as st
 import pandas as pd
 
 # Define local master file path
-# Linux/Cloud safe path resolver
-def resolve_master_path():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    primary = os.path.join(base_dir, "master_data.xlsx")
-    if os.path.exists(primary):
-        return primary
-    for f in os.listdir(base_dir):
-        if f.lower().startswith("master_data") and f.lower().endswith((".xlsx", ".xls")):
-            return os.path.join(base_dir, f)
-    return primary
-
-HARDCODED_MASTER_PATH = resolve_master_path()
+HARDCODED_MASTER_PATH = "master_data.xlsx"
 
 # -------------------------------------------------------------
 # Custom Override Rules Configuration
@@ -352,26 +341,15 @@ st.markdown(
 
 # Deep Cleaning Helper
 def clean_val(val):
-    if pd.isna(val) or val is None or str(val).strip() == "":
+    if pd.isna(val) or val is None:
         return ""
-    
-    # Handle floats/ints properly across Linux and Windows
     if isinstance(val, (int, float)):
-        try:
-            val_str = str(int(float(val))) if float(val).is_integer() else str(val)
-        except (ValueError, OverflowError):
-            val_str = str(val)
+        val_str = str(int(val)) if float(val).is_integer() else str(val)
     else:
         val_str = str(val)
     
-    # Strip non-breaking spaces and hidden line breaks
-    val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', val_str)
+    val_str = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF]', ' ', val_str)
     val_str = re.sub(r'\s+', ' ', val_str).strip()
-    
-    # Remove trailing ".0" if Pandas stored integer as float string
-    if val_str.endswith(".0"):
-        val_str = val_str[:-2]
-        
     return val_str.upper()
 
 def find_column(columns, keywords_priority):
@@ -397,11 +375,8 @@ STRICT_REF_NAME_KEYWORDS = [
 # -------------------------------------------------------------
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
-# -------------------------------------------------------------
-# Cached Master File Lookup Engine
-# -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path, cache_buster="v34"):
+def load_master_lookup(file_path):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
@@ -443,22 +418,18 @@ def load_master_lookup(file_path, cache_buster="v34"):
                     note_objects_map[clean_note].add(clean_name)
                     note_objects_map[clean_note].add(clean_type)
 
+                    # Store BOTH key ordering combinations to handle column order swaps (e.g. ("VTTK", "TABL") = ("TABL", "VTTK"))
                     key_a = (clean_note, clean_name, clean_type)
                     key_b = (clean_note, clean_type, clean_name)
                     
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
-                    
-                    raw_comment = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
-                    raw_comment = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF\r\n]', ' ', raw_comment).strip()
-
-                    if raw_comment.upper() in ["NAN", "NONE", "NULL", ""]:
-                        raw_comment = ""
+                    comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
 
                     data_obj = {
                         "scope": scope_val,
                         "sst_action": sst_val,
-                        "comments": raw_comment
+                        "comments": comment_val
                     }
 
                     lookup_3part[key_a] = data_obj
@@ -470,8 +441,6 @@ def load_master_lookup(file_path, cache_buster="v34"):
     return lookup_3part, notes_set, note_objects_map
 
 master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH)
-
-st.warning(f"DEBUG: Master Keys in Memory = {len(master_lookup)}")
 
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
@@ -487,7 +456,7 @@ with header_col1:
                 </div>
             </div>
             <div class="version-badge">
-                🟢 {HARDCODED_MASTER_PATH} · v33
+                🟢 {HARDCODED_MASTER_PATH} · v19
             </div>
         </div>
     """,
@@ -567,7 +536,7 @@ elif st.session_state["step"] == "processing":
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step2}</span> Loading master reference</span>
-                <span class="step-meta">v33 · {len(master_lookup)//2:,} notes</span>
+                <span class="step-meta">v19 · {len(master_lookup)//2:,} notes</span>
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step3}</span> Normalising note numbers & referenced keys</span>
@@ -634,24 +603,11 @@ elif st.session_state["step"] == "processing":
 
             has_db_op = any(op in msg_val for op in DB_OPERATIONS)
             
-            # Construct both key orientations explicitly
             key_a = (note_val, name_val, type_val)
             key_b = (note_val, type_val, name_val)
 
-            # Query master dictionary across both orientations
             master_entry = master_lookup.get(key_a) or master_lookup.get(key_b) or {}
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
-
-            # =================================----------------------------
-            # STRICT DECOUPLED COMMENT RESOLUTION
-            # Looks strictly at 3-part key in master data.
-            # Ignores all other rules (Direct Tech, DB Op, etc.)
-            # =================================----------------------------
-            comment_val = ""
-            if master_entry:
-                raw_c = str(master_entry.get("comments", "")).strip()
-                if raw_c.upper() not in ["NAN", "NONE", "NULL", ""]:
-                    comment_val = raw_c
 
             # -------------------------------------------------------------
             # RULE 0: Blank Note Number
@@ -660,6 +616,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = "#N/A"
+                comment_val = ""
                 debug_reason = "Matched via Blank Note Number rule"
 
             # -------------------------------------------------------------
@@ -670,6 +627,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "Technical"
                 status = "Matched"
                 automated_val = "Semi-Automatic"
+                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Direct Technical Note list ({note_val})"
 
             # -------------------------------------------------------------
@@ -681,21 +639,25 @@ elif st.session_state["step"] == "processing":
                     assigned_assessment = "Technical"
                     status = "Matched"
                     automated_val = master_entry.get("sst_action", "")
+                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBFA DB Op rule"
                 elif any(obj in name_val for obj in ["VBUP", "VBUK"]):
                     assigned_assessment = "Functional"
                     status = "Matched"
                     automated_val = "NA"
+                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBUP/VBUK DB Op rule"
                 elif is_in_master:
                     assigned_assessment = master_entry["scope"]
                     status = "Matched"
                     automated_val = master_entry["sst_action"]
+                    comment_val = master_entry["comments"]
                     debug_reason = "Matched via Note 2198647 Master Data Fallback"
                 else:
                     assigned_assessment = "New / Unmapped Note"
                     status = "Not Found"
                     automated_val = ""
+                    comment_val = ""
                     debug_reason = "Note 2198647 DB Op present but Referenced Object mismatch"
 
             # -------------------------------------------------------------
@@ -706,6 +668,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = DB_OPERATION_NOTES[note_val]
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
+                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Manual DB Operation keyword rule ({note_val})"
 
             # -------------------------------------------------------------
@@ -716,6 +679,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = master_entry["scope"]
                 status = "Matched"
                 automated_val = master_entry["sst_action"]
+                comment_val = master_entry["comments"]
                 debug_reason = "Matched via Master Data Referenced Object 3-part key lookup"
 
             # -------------------------------------------------------------
@@ -725,6 +689,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
+                comment_val = master_entry.get("comments", "")
                 debug_reason = "Matched via Special Note 1912445 rule"
 
             # -------------------------------------------------------------
@@ -734,6 +699,7 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "New / Unmapped Note"
                 status = "Not Found"
                 automated_val = ""
+                comment_val = ""
 
                 # Diagnostic Reason Generation on REFERENCED Objects
                 if note_val not in notes_set:
