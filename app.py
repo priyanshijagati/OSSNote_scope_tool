@@ -872,8 +872,21 @@ import time
 import streamlit as st
 import pandas as pd
 
-# Define local master file path
-HARDCODED_MASTER_PATH = "master_data.xlsx"
+# -------------------------------------------------------------
+# Case-Insensitive Local Master File Finder (Linux & Cloud Safe)
+# -------------------------------------------------------------
+def get_master_file_path():
+    target_base = "master_data"
+    if os.path.exists("master_data.xlsx"):
+        return "master_data.xlsx"
+    
+    # Search local folder for case variations (e.g., Master_Data.xlsx)
+    for f in os.listdir("."):
+        if f.lower().startswith(target_base) and f.lower().endswith((".xlsx", ".xls")):
+            return f
+    return "master_data.xlsx"
+
+HARDCODED_MASTER_PATH = get_master_file_path()
 
 # -------------------------------------------------------------
 # Custom Override Rules Configuration
@@ -1240,10 +1253,10 @@ STRICT_REF_NAME_KEYWORDS = [
 ]
 
 # -------------------------------------------------------------
-# Cached Master File Lookup Engine
+# Cached Master File Lookup Engine (Cache Invalidation Tag: v31)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path):
+def load_master_lookup(file_path, version_tag="v31"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
@@ -1260,7 +1273,7 @@ def load_master_lookup(file_path):
             col_m_scope = find_column(m_cols, ["functional assessment", "scope", "cat", "track"])
             col_m_sst = find_column(m_cols, ["sst action", "sst_action", "automated", "sst", "action"])
             
-            # Explicitly target Column N ("Comments"), ignoring "Additional comments"
+            # Explicitly target Column N ("Comments", Index 13), bypassing "Additional comments"
             col_m_comments = None
             if len(m_cols) >= 14:
                 col_m_comments = m_cols[13] # Column N is 0-indexed as 13
@@ -1285,13 +1298,18 @@ def load_master_lookup(file_path):
                     note_objects_map[clean_note].add(clean_name)
                     note_objects_map[clean_note].add(clean_type)
 
-                    # Store BOTH key ordering combinations to handle column order swaps (e.g. ("VTTK", "TABL") = ("TABL", "VTTK"))
+                    # Store BOTH key ordering combinations to handle column order swaps
                     key_a = (clean_note, clean_name, clean_type)
                     key_b = (clean_note, clean_type, clean_name)
                     
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
+                    
+                    # Extract comment strictly from Column N
                     comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
+                    comment_val = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF]', ' ', comment_val).strip()
+                    if comment_val.upper() in ["NAN", "NONE", "NULL"]:
+                        comment_val = ""
 
                     data_obj = {
                         "scope": scope_val,
@@ -1303,11 +1321,11 @@ def load_master_lookup(file_path):
                     lookup_3part[key_b] = data_obj
 
         except Exception as e:
-            st.error(f"Error reading master dataset: {e}")
+            st.error(f"Error reading master dataset ({file_path}): {e}")
             
     return lookup_3part, notes_set, note_objects_map
 
-master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH)
+master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH, version_tag="v31")
 
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
@@ -1323,7 +1341,7 @@ with header_col1:
                 </div>
             </div>
             <div class="version-badge">
-                🟢 {HARDCODED_MASTER_PATH} · v19
+                🟢 {HARDCODED_MASTER_PATH} · v31
             </div>
         </div>
     """,
@@ -1403,7 +1421,7 @@ elif st.session_state["step"] == "processing":
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step2}</span> Loading master reference</span>
-                <span class="step-meta">v19 · {len(master_lookup)//2:,} notes</span>
+                <span class="step-meta">v31 · {len(master_lookup)//2:,} notes</span>
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step3}</span> Normalising note numbers & referenced keys</span>
@@ -1414,7 +1432,7 @@ elif st.session_state["step"] == "processing":
                 <span class="step-meta">priority execution</span>
             </div>
             <div class="step-item">
-                <span><span class="step-icon">{step5}</span> Appending 5 output columns with debug reasons</span>
+                <span><span class="step-icon">{step5}</span> Appending 5 output columns with Column N comments</span>
                 <span class="step-meta">5 columns</span>
             </div>
         </div>
@@ -1476,6 +1494,16 @@ elif st.session_state["step"] == "processing":
             master_entry = master_lookup.get(key_a) or master_lookup.get(key_b) or {}
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
 
+            # =================================----------------------------
+            # SEPARATE INDEPENDENT RULE FOR COMMENTS COLUMN
+            # Strictly checks 3-part key in master_data.xlsx.
+            # No rules (Direct Tech, DB Op, etc.) can override or influence this.
+            # =================================----------------------------
+            if is_in_master and master_entry.get("comments"):
+                comment_val = master_entry["comments"]
+            else:
+                comment_val = ""
+
             # -------------------------------------------------------------
             # RULE 0: Blank Note Number
             # -------------------------------------------------------------
@@ -1483,18 +1511,16 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = "#N/A"
-                comment_val = ""
                 debug_reason = "Matched via Blank Note Number rule"
 
             # -------------------------------------------------------------
             # RULE 1: Direct Technical Notes Override
-            # (Direct Technical Notes NEVER query master_data.xlsx, Automated forced to "Semi-Automatic")
+            # (Automated forced to "Semi-Automatic")
             # -------------------------------------------------------------
             elif note_val in DIRECT_TECHNICAL_NOTES:
                 assigned_assessment = "Technical"
                 status = "Matched"
                 automated_val = "Semi-Automatic"
-                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Direct Technical Note list ({note_val})"
 
             # -------------------------------------------------------------
@@ -1506,25 +1532,21 @@ elif st.session_state["step"] == "processing":
                     assigned_assessment = "Technical"
                     status = "Matched"
                     automated_val = master_entry.get("sst_action", "")
-                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBFA DB Op rule"
                 elif any(obj in name_val for obj in ["VBUP", "VBUK"]):
                     assigned_assessment = "Functional"
                     status = "Matched"
                     automated_val = "NA"
-                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBUP/VBUK DB Op rule"
                 elif is_in_master:
                     assigned_assessment = master_entry["scope"]
                     status = "Matched"
                     automated_val = master_entry["sst_action"]
-                    comment_val = master_entry["comments"]
                     debug_reason = "Matched via Note 2198647 Master Data Fallback"
                 else:
                     assigned_assessment = "New / Unmapped Note"
                     status = "Not Found"
                     automated_val = ""
-                    comment_val = ""
                     debug_reason = "Note 2198647 DB Op present but Referenced Object mismatch"
 
             # -------------------------------------------------------------
@@ -1535,7 +1557,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = DB_OPERATION_NOTES[note_val]
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
-                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Manual DB Operation keyword rule ({note_val})"
 
             # -------------------------------------------------------------
@@ -1546,7 +1567,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = master_entry["scope"]
                 status = "Matched"
                 automated_val = master_entry["sst_action"]
-                comment_val = master_entry["comments"]
                 debug_reason = "Matched via Master Data Referenced Object 3-part key lookup"
 
             # -------------------------------------------------------------
@@ -1556,7 +1576,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
-                comment_val = master_entry.get("comments", "")
                 debug_reason = "Matched via Special Note 1912445 rule"
 
             # -------------------------------------------------------------
@@ -1566,7 +1585,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "New / Unmapped Note"
                 status = "Not Found"
                 automated_val = ""
-                comment_val = ""
 
                 # Diagnostic Reason Generation on REFERENCED Objects
                 if note_val not in notes_set:
@@ -1730,5 +1748,4 @@ elif st.session_state["step"] in ["dashboard", "export_modal"]:
             """,
             height=0
         )
-
 
