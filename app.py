@@ -1325,7 +1325,7 @@ def load_master_lookup(file_path, cache_buster="v_force_refresh_1"):
             
     return lookup_3part, notes_set, note_objects_map
 
-master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH, version_tag="v31")
+master_lookup, notes_set, note_objects_map = load_master_lookup(HARDCODED_MASTER_PATH)
 
 # Top Header Bar
 header_col1, header_col2 = st.columns([4, 1])
