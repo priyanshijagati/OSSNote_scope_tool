@@ -1256,7 +1256,7 @@ STRICT_REF_NAME_KEYWORDS = [
 # Cached Master File Lookup Engine (Cache Invalidation Tag: v31)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path, version_tag="v31"):
+def load_master_lookup(file_path, cache_buster="v_force_refresh_1"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
