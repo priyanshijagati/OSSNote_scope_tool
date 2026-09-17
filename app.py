@@ -387,7 +387,7 @@ STRICT_REF_NAME_KEYWORDS = [
 # Cached Master File Lookup Engine
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def load_master_lookup(file_path, cache_buster="v32"):
+def load_master_lookup(file_path, cache_buster="v33"):
     lookup_3part = {}
     notes_set = set()
     note_objects_map = {}
@@ -435,7 +435,11 @@ def load_master_lookup(file_path, cache_buster="v32"):
                     
                     scope_val = str(row[col_m_scope]).strip() if row[col_m_scope] is not None else ""
                     sst_val = str(row[col_m_sst]).strip() if col_m_sst and row[col_m_sst] is not None else ""
+                    
                     comment_val = str(row[col_m_comments]).strip() if col_m_comments and row[col_m_comments] is not None else ""
+                    comment_val = re.sub(r'[\xa0\u200b\u200c\u200d\uFEFF]', ' ', comment_val).strip()
+                    if comment_val.upper() in ["NAN", "NONE", "NULL"]:
+                        comment_val = ""
 
                     data_obj = {
                         "scope": scope_val,
@@ -469,7 +473,7 @@ with header_col1:
                 </div>
             </div>
             <div class="version-badge">
-                🟢 {HARDCODED_MASTER_PATH} · v19
+                🟢 {HARDCODED_MASTER_PATH} · v33
             </div>
         </div>
     """,
@@ -549,7 +553,7 @@ elif st.session_state["step"] == "processing":
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step2}</span> Loading master reference</span>
-                <span class="step-meta">v19 · {len(master_lookup)//2:,} notes</span>
+                <span class="step-meta">v33 · {len(master_lookup)//2:,} notes</span>
             </div>
             <div class="step-item">
                 <span><span class="step-icon">{step3}</span> Normalising note numbers & referenced keys</span>
@@ -608,7 +612,7 @@ elif st.session_state["step"] == "processing":
         comments_list = []
         debug_reason_list = []
 
-       for idx, row in fresh_df.iterrows():
+        for idx, row in fresh_df.iterrows():
             note_val = clean_val(row[col_f_note])
             name_val = clean_val(row[col_f_name])  # Strictly Referenced Object Name
             type_val = clean_val(row[col_f_type])  # Strictly Referenced Object Type
@@ -622,6 +626,16 @@ elif st.session_state["step"] == "processing":
             master_entry = master_lookup.get(key_a) or master_lookup.get(key_b) or {}
             is_in_master = bool(master_entry and master_entry.get("scope") is not None)
 
+            # =================================----------------------------
+            # SEPARATE INDEPENDENT RULE FOR COMMENTS COLUMN
+            # Strictly checks 3-part key in master_data.xlsx.
+            # No rules (Direct Tech, DB Op, etc.) can override or influence this.
+            # =================================----------------------------
+            if is_in_master and master_entry.get("comments"):
+                comment_val = master_entry["comments"]
+            else:
+                comment_val = ""
+
             # -------------------------------------------------------------
             # RULE 0: Blank Note Number
             # -------------------------------------------------------------
@@ -629,7 +643,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = "#N/A"
-                comment_val = ""
                 debug_reason = "Matched via Blank Note Number rule"
 
             # -------------------------------------------------------------
@@ -640,7 +653,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "Technical"
                 status = "Matched"
                 automated_val = "Semi-Automatic"
-                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Direct Technical Note list ({note_val})"
 
             # -------------------------------------------------------------
@@ -652,25 +664,21 @@ elif st.session_state["step"] == "processing":
                     assigned_assessment = "Technical"
                     status = "Matched"
                     automated_val = master_entry.get("sst_action", "")
-                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBFA DB Op rule"
                 elif any(obj in name_val for obj in ["VBUP", "VBUK"]):
                     assigned_assessment = "Functional"
                     status = "Matched"
                     automated_val = "NA"
-                    comment_val = master_entry.get("comments", "")
                     debug_reason = "Matched via Note 2198647 VBUP/VBUK DB Op rule"
                 elif is_in_master:
                     assigned_assessment = master_entry["scope"]
                     status = "Matched"
                     automated_val = master_entry["sst_action"]
-                    comment_val = master_entry["comments"]
                     debug_reason = "Matched via Note 2198647 Master Data Fallback"
                 else:
                     assigned_assessment = "New / Unmapped Note"
                     status = "Not Found"
                     automated_val = ""
-                    comment_val = ""
                     debug_reason = "Note 2198647 DB Op present but Referenced Object mismatch"
 
             # -------------------------------------------------------------
@@ -681,7 +689,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = DB_OPERATION_NOTES[note_val]
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
-                comment_val = master_entry.get("comments", "")
                 debug_reason = f"Matched via Manual DB Operation keyword rule ({note_val})"
 
             # -------------------------------------------------------------
@@ -692,7 +699,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = master_entry["scope"]
                 status = "Matched"
                 automated_val = master_entry["sst_action"]
-                comment_val = master_entry["comments"]
                 debug_reason = "Matched via Master Data Referenced Object 3-part key lookup"
 
             # -------------------------------------------------------------
@@ -702,7 +708,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "HCC/HPO"
                 status = "Matched"
                 automated_val = master_entry.get("sst_action", "")
-                comment_val = master_entry.get("comments", "")
                 debug_reason = "Matched via Special Note 1912445 rule"
 
             # -------------------------------------------------------------
@@ -712,7 +717,6 @@ elif st.session_state["step"] == "processing":
                 assigned_assessment = "New / Unmapped Note"
                 status = "Not Found"
                 automated_val = ""
-                comment_val = ""
 
                 # Diagnostic Reason Generation on REFERENCED Objects
                 if note_val not in notes_set:
